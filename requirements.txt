@@ -1,0 +1,15 @@
+# Required Python packages for Excel to Pinecone processing
+
+# Excel processing
+pandas>=2.0.0
+openpyxl>=3.1.0  # Required for reading .xlsx files
+
+# Vector database
+pinecone-client>=3.0.0
+
+# Local embeddings (no API needed - fast and free!)
+sentence-transformers>=2.2.0
+torch>=2.0.0  # Required by sentence-transformers
+
+# Utilities
+numpy>=1.24.0
