@@ -177,6 +177,67 @@ Chunk 1 (Rows 0-5):
 - **Accuracy**: 80-85% for exact matches, 50-60% for partial
 - **Cost**: $0 (local embeddings, only Pinecone storage)
 
+## Metadata in Each Chunk
+
+Every chunk stored in Pinecone includes rich metadata:
+
+### Sheet/Tab Information
+- `sheet_name` / `tab_name` - Name of the Excel sheet/tab
+- `start_row` - Starting row number (0-indexed)
+- `end_row` - Ending row number
+- `chunk_size` - Number of rows in this chunk
+
+### Column/Header Information
+- `headers` - Comma-separated list of column headers
+- `column_names` - Array of column names
+- `total_columns` - Total number of columns
+- `has_id` - Boolean: contains ID/Ref column
+- `has_title` - Boolean: contains Title/Requirement column
+
+### Content
+- `content` - First 1000 chars of chunk content
+- `full_content` - Complete chunk text
+- `first_row_preview` - Preview of first row data
+
+### Extracted Column Values
+- `col_id` / `col_ref_num` - ID/Reference numbers
+- `col_title` / `col_requirement` - Titles/Requirements
+- `col_category` / `col_type` - Categories/Types
+
+**Example metadata:**
+```python
+{
+    "sheet_name": "3. Integration Requirements",
+    "tab_name": "3. Integration Requirements",
+    "start_row": 0,
+    "end_row": 5,
+    "headers": "Ref. #, Requirement, Description, Importance, Author",
+    "column_names": ["Ref. #", "Requirement", "Description", ...],
+    "total_columns": 10,
+    "has_id": True,
+    "has_title": True,
+    "col_ref_num": "3.1.1, 3.1.2, 3.1.3",
+    "col_requirement": "WhatsApp integration, API support, ...",
+    "first_row_preview": "{'Ref. #': '3.1.1', 'Requirement': 'WhatsApp'}",
+    "content": "3: 3.1.1 | INTEGRATION REQUIREMENTS: WhatsApp...",
+    "full_content": "..."
+}
+```
+
+### Using Metadata for Filtering
+```python
+# Search with metadata filter
+results = processor.index.query(
+    vector=query_embedding,
+    top_k=10,
+    filter={
+        "sheet_name": {"$eq": "3. Integration Requirements"},
+        "has_id": {"$eq": True}
+    },
+    include_metadata=True
+)
+```
+
 ## Files
 
 - `excel_pinecone_processor.py` - Core processor class

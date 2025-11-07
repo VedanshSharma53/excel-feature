@@ -92,6 +92,25 @@ def main():
                 if result['content']:
                     print(f"   Found {len(result['content'])} chunks\n")
                     
+                    # Show metadata from first chunk
+                    first_chunk = result['content'][0]
+                    metadata = first_chunk.get('metadata', {})
+                    
+                    print("📋 Metadata:")
+                    print(f"   • Tab Name: {metadata.get('tab_name', 'N/A')}")
+                    print(f"   • Sheet Name: {metadata.get('sheet_name', 'N/A')}")
+                    print(f"   • Headers: {metadata.get('headers', 'N/A')}")
+                    print(f"   • Total Columns: {metadata.get('total_columns', 'N/A')}")
+                    print(f"   • Has ID Column: {metadata.get('has_id', 'N/A')}")
+                    print(f"   • Has Title Column: {metadata.get('has_title', 'N/A')}")
+                    
+                    # Show column values if available
+                    if metadata.get('col_id'):
+                        print(f"   • Sample IDs: {metadata.get('col_id', '')[:100]}...")
+                    if metadata.get('col_title'):
+                        print(f"   • Sample Titles: {metadata.get('col_title', '')[:100]}...")
+                    print()
+                    
                     # Show first 3 chunks
                     for i, chunk in enumerate(result['content'][:3], 1):
                         print(f"\n   Chunk {i} (Rows {chunk['rows']}):")

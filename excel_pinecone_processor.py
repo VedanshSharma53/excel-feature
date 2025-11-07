@@ -144,6 +144,9 @@ class ExcelPineconeProcessor:
         # Drop completely empty rows
         df = df.dropna(how='all')
         
+        # Store column headers/titles
+        column_headers = list(df.columns)
+        
         # Process in chunks
         for i in range(0, len(df), chunk_size):
             chunk_df = df.iloc[i:i + chunk_size]
@@ -160,15 +163,50 @@ class ExcelPineconeProcessor:
             # Create embedding
             embedding = self.create_embedding(chunk_text)
             
-            # Prepare metadata
+            # Extract key values from first row (often contains titles/identifiers)
+            first_row_data = {}
+            if len(chunk_df) > 0:
+                first_row = chunk_df.iloc[0]
+                for col in chunk_df.columns:
+                    val = first_row[col]
+                    if pd.notna(val) and str(val).strip():
+                        # Store first non-empty value from each column
+                        first_row_data[str(col)] = str(val)[:100]  # Limit to 100 chars
+            
+            # Prepare enhanced metadata
             metadata = {
+                # Sheet identification
                 "sheet_name": sheet_name,
+                "tab_name": sheet_name,  # Alias for clarity
+                
+                # Row information
                 "start_row": i,
                 "end_row": min(i + chunk_size, len(df)),
-                "content": chunk_text[:1000],  # Store first 1000 chars in metadata
+                "chunk_size": len(chunk_df),
+                
+                # Column headers/titles
+                "headers": ", ".join(column_headers[:10]),  # First 10 headers
+                "column_names": column_headers[:10],  # As list
+                "total_columns": len(column_headers),
+                
+                # First row data (often contains identifiers/titles)
+                "first_row_preview": str(first_row_data)[:500] if first_row_data else "",
+                
+                # Content
+                "content": chunk_text[:1000],  # Store first 1000 chars
                 "full_content": chunk_text,  # Store full content
-                "chunk_size": len(chunk_df)
+                
+                # Optional: Extract specific columns if they exist
+                "has_id": "ID" in column_headers or "id" in column_headers or "Ref. #" in column_headers,
+                "has_title": "Title" in column_headers or "title" in column_headers or "Requirement" in column_headers,
             }
+            
+            # Add specific column values if they exist (for better filtering)
+            for col in ["ID", "id", "Ref. #", "Title", "Requirement", "Category", "Type"]:
+                if col in chunk_df.columns:
+                    values = chunk_df[col].dropna().astype(str).tolist()
+                    if values:
+                        metadata[f"col_{col.lower().replace('. ', '_').replace('#', 'num')}"] = ", ".join(values[:5])
             
             chunks.append({
                 "id": chunk_id,
