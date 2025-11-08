@@ -7,8 +7,111 @@ import os
 import subprocess
 import uuid
 import json
+import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 500, overlap: int = 50) -> list:
+    """Split text into chunks and add Excel metadata to each chunk."""
+    if not text or not text.strip():
+        return []
+    
+    # Quick metadata extraction from Excel
+    metadata_dict = {}
+    try:
+        xl = pd.ExcelFile(excel_path)
+        for sheet in xl.sheet_names:
+            df = pd.read_excel(excel_path, sheet_name=sheet)
+            if not df.empty:
+                metadata_dict[sheet] = {
+                    "headers": list(df.columns)[:10],
+                    "total_rows": len(df),
+                    "total_columns": len(df.columns)
+                }
+    except:
+        pass
+    
+    # Split into chunks
+    lines = text.split('\n')
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        if current_length + len(line) > chunk_size and current_chunk:
+            chunk_text = '\n'.join(current_chunk)
+            
+            # Detect sheet name
+            sheet_name = "example"
+            for sheet in metadata_dict.keys():
+                if sheet.lower() in chunk_text.lower():
+                    sheet_name = sheet
+                    break
+            
+            # Build chunk with metadata
+            chunk_obj = {
+                "text": chunk_text,
+                "metadata": {
+                    "sheet_name": sheet_name,
+                    "chunk_index": len(chunks),
+                    "chunk_size": len(chunk_text)
+                }
+            }
+            
+            # Add sheet metadata if available
+            if sheet_name in metadata_dict:
+                chunk_obj["metadata"].update(metadata_dict[sheet_name])
+            
+            chunks.append(chunk_obj)
+            
+            # Overlap
+            if overlap > 0 and len(current_chunk) > 1:
+                overlap_lines = []
+                overlap_len = 0
+                for prev_line in reversed(current_chunk):
+                    if overlap_len + len(prev_line) <= overlap:
+                        overlap_lines.insert(0, prev_line)
+                        overlap_len += len(prev_line)
+                    else:
+                        break
+                current_chunk = overlap_lines
+                current_length = overlap_len
+            else:
+                current_chunk = []
+                current_length = 0
+        
+        current_chunk.append(line)
+        current_length += len(line)
+    
+    # Add last chunk
+    if current_chunk:
+        chunk_text = '\n'.join(current_chunk)
+        sheet_name = "Unknown"
+        for sheet in metadata_dict.keys():
+            if sheet.lower() in chunk_text.lower():
+                sheet_name = sheet
+                break
+        
+        chunk_obj = {
+            "text": chunk_text,
+            "metadata": {
+                "sheet_name": sheet_name,
+                "chunk_index": len(chunks),
+                "chunk_size": len(chunk_text)
+            }
+        }
+        if sheet_name in metadata_dict:
+            chunk_obj["metadata"].update(metadata_dict[sheet_name])
+        
+        chunks.append(chunk_obj)
+    
+    return chunks
+
 
 async def convert_xlsx_service(
     file: UploadFile,
@@ -88,12 +191,17 @@ async def convert_xlsx_service(
             
             logger.info(f"Successfully extracted {len(extracted_text)} characters")
             
+            # Create chunks with metadata
+            chunks = _create_chunks_with_metadata(extracted_text, tmp_input_path)
+            
             # Build response
             response_data = {
                 "id": str(uuid.uuid4()),
                 "success": True,
                 "name": file.filename,
                 "text": extracted_text,
+                "chunks": chunks,
+                "total_chunks": len(chunks),
                 "length": len(extracted_text),
                 "method": "apache-tika",
                 "file_type": "xlsx" if is_xlsx else "xls"
