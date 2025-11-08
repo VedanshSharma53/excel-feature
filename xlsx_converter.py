@@ -12,7 +12,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 500, overlap: int = 50) -> list:
+def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 1000, overlap: int = 200) -> list:
     """Split text into chunks and add Excel metadata to each chunk."""
     if not text or not text.strip():
         return []
@@ -20,15 +20,15 @@ def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 5
     # Quick metadata extraction from Excel
     metadata_dict = {}
     try:
-        xl = pd.ExcelFile(excel_path)
-        for sheet in xl.sheet_names:
-            df = pd.read_excel(excel_path, sheet_name=sheet)
-            if not df.empty:
-                metadata_dict[sheet] = {
-                    "headers": list(df.columns)[:10],
-                    "total_rows": len(df),
-                    "total_columns": len(df.columns)
-                }
+        with pd.ExcelFile(excel_path) as xl:
+            for sheet in xl.sheet_names:
+                df = pd.read_excel(xl, sheet_name=sheet)
+                if not df.empty:
+                    metadata_dict[sheet] = {
+                        "headers": list(df.columns)[:10],
+                        "total_rows": len(df),
+                        "total_columns": len(df.columns)
+                    }
     except:
         pass
     
@@ -115,11 +115,17 @@ def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 5
 
 async def convert_xlsx_service(
     file: UploadFile,
-    input_json: str = None
+    input_json: str = None,
+    xml_file: str = None
 ):
     """
     Convert XLSX/XLS file to plain text using Apache Tika.
     Returns JSON with extracted text and metadata.
+    
+    Args:
+        file: Excel file to convert
+        input_json: Optional JSON string with additional data
+        xml_file: Optional XML file content/path
     """
     # Validate file type
     if not (file.filename.endswith('.xlsx') or file.filename.endswith('.xls')):
@@ -218,6 +224,10 @@ async def convert_xlsx_service(
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON in input_json parameter")
                     response_data["input_json"] = input_json
+            
+            # Add xml_file if provided
+            if xml_file:
+                response_data["xml_file"] = xml_file
             
             return JSONResponse(content=response_data)
             
