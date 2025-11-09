@@ -10,6 +10,12 @@ FastAPI service for Excel file processing with **intelligent header detection** 
 - **Handles edge cases**: Unnamed columns, numeric headers, mixed data
 - **No assumptions**: Works with files that have headers OR start directly with data
 
+### 🎯 Smart Sheet Name Detection
+- **Position-based tracking** - Knows where each sheet's content appears
+- **Multi-strategy matching** - Uses 4 different detection methods
+- **No more "Unknown"** - Always returns meaningful sheet names
+- **Handles edge cases**: Missing sheet names in text, similar content across sheets
+
 ### 📊 Rich Metadata Extraction
 - **Column type detection**: Numeric, text, datetime, mixed
 - **Pattern recognition**: Automatically identifies ID, title, date, and categorical columns

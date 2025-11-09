@@ -248,13 +248,34 @@ def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 1
     
     # Deep metadata extraction from Excel with intelligent header detection
     metadata_dict = {}
+    sheet_markers = {}  # Track where each sheet's content appears in text
+    
     try:
         with pd.ExcelFile(excel_path) as xl:
+            current_position = 0
             for sheet in xl.sheet_names:
                 df = pd.read_excel(xl, sheet_name=sheet)
                 if not df.empty:
                     # Use intelligent structure analysis
                     metadata_dict[sheet] = _analyze_sheet_structure(df, sheet)
+                    
+                    # Create a signature for this sheet to find it in text
+                    # Use first few non-null values as markers
+                    markers = []
+                    for col in df.columns[:3]:  # First 3 columns
+                        vals = df[col].dropna().head(2).astype(str).tolist()
+                        markers.extend(vals)
+                    
+                    if markers:
+                        # Find where this content appears in the text
+                        search_text = ' '.join(markers[:5])  # Use first 5 values
+                        pos = text.lower().find(search_text.lower())
+                        if pos != -1:
+                            sheet_markers[sheet] = pos
+                        else:
+                            # Fallback: use sheet name position
+                            sheet_markers[sheet] = current_position
+                        current_position = pos if pos != -1 else current_position + 1000
     except Exception as e:
         logger.warning(f"Could not extract detailed metadata: {e}")
         # Fallback to basic metadata
@@ -264,6 +285,7 @@ def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 1
                     df = pd.read_excel(xl, sheet_name=sheet)
                     if not df.empty:
                         metadata_dict[sheet] = {
+                            "sheet_name": sheet,
                             "headers": list(df.columns)[:10],
                             "total_rows": len(df),
                             "total_columns": len(df.columns)
@@ -271,26 +293,33 @@ def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 1
         except:
             pass
     
+    # If no sheets detected, use a default
+    if not metadata_dict:
+        metadata_dict["Sheet1"] = {"sheet_name": "Sheet1"}
+    
     # Split into chunks
     lines = text.split('\n')
     chunks = []
     current_chunk = []
     current_length = 0
+    current_char_position = 0
     
     for line in lines:
         line = line.strip()
         if not line:
+            current_char_position += 1
             continue
         
         if current_length + len(line) > chunk_size and current_chunk:
             chunk_text = '\n'.join(current_chunk)
             
-            # Detect sheet name
-            sheet_name = "example"
-            for sheet in metadata_dict.keys():
-                if sheet.lower() in chunk_text.lower():
-                    sheet_name = sheet
-                    break
+            # Improved sheet name detection
+            sheet_name = _detect_sheet_for_chunk(
+                chunk_text, 
+                current_char_position, 
+                metadata_dict, 
+                sheet_markers
+            )
             
             # Build chunk with metadata
             chunk_obj = {
@@ -298,13 +327,17 @@ def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 1
                 "metadata": {
                     "sheet_name": sheet_name,
                     "chunk_index": len(chunks),
-                    "chunk_size": len(chunk_text)
+                    "chunk_size": len(chunk_text),
+                    "char_position": current_char_position
                 }
             }
             
             # Add sheet metadata if available
             if sheet_name in metadata_dict:
-                chunk_obj["metadata"].update(metadata_dict[sheet_name])
+                sheet_meta = metadata_dict[sheet_name].copy()
+                # Ensure sheet_name is set correctly
+                sheet_meta["sheet_name"] = sheet_name
+                chunk_obj["metadata"].update(sheet_meta)
             
             chunks.append(chunk_obj)
             
@@ -326,30 +359,93 @@ def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 1
         
         current_chunk.append(line)
         current_length += len(line)
+        current_char_position += len(line) + 1
     
     # Add last chunk
     if current_chunk:
         chunk_text = '\n'.join(current_chunk)
-        sheet_name = "Unknown"
-        for sheet in metadata_dict.keys():
-            if sheet.lower() in chunk_text.lower():
-                sheet_name = sheet
-                break
+        sheet_name = _detect_sheet_for_chunk(
+            chunk_text,
+            current_char_position,
+            metadata_dict,
+            sheet_markers
+        )
         
         chunk_obj = {
             "text": chunk_text,
             "metadata": {
                 "sheet_name": sheet_name,
                 "chunk_index": len(chunks),
-                "chunk_size": len(chunk_text)
+                "chunk_size": len(chunk_text),
+                "char_position": current_char_position
             }
         }
+        
         if sheet_name in metadata_dict:
-            chunk_obj["metadata"].update(metadata_dict[sheet_name])
+            sheet_meta = metadata_dict[sheet_name].copy()
+            sheet_meta["sheet_name"] = sheet_name
+            chunk_obj["metadata"].update(sheet_meta)
         
         chunks.append(chunk_obj)
     
     return chunks
+
+
+def _detect_sheet_for_chunk(chunk_text: str, char_position: int, metadata_dict: dict, sheet_markers: dict) -> str:
+    """
+    Intelligently detect which sheet a chunk belongs to.
+    
+    Uses multiple strategies:
+    1. Position-based detection (where in document)
+    2. Content-based detection (matching text patterns)
+    3. Sheet name in text
+    """
+    if not metadata_dict:
+        return "Unknown"
+    
+    # Strategy 1: Use position markers
+    if sheet_markers:
+        # Find the closest sheet based on position
+        best_sheet = None
+        min_distance = float('inf')
+        
+        for sheet, position in sheet_markers.items():
+            distance = abs(char_position - position)
+            if distance < min_distance:
+                min_distance = distance
+                best_sheet = sheet
+        
+        if best_sheet:
+            return best_sheet
+    
+    # Strategy 2: Check if sheet name appears in chunk
+    chunk_lower = chunk_text.lower()
+    for sheet in metadata_dict.keys():
+        if sheet.lower() in chunk_lower:
+            return sheet
+    
+    # Strategy 3: Check if any header values appear in chunk
+    for sheet, meta in metadata_dict.items():
+        if isinstance(meta, dict):
+            headers = meta.get('headers', [])
+            if isinstance(headers, list):
+                # Check if multiple headers appear in chunk
+                matches = sum(1 for h in headers[:5] if str(h).lower() in chunk_lower)
+                if matches >= 2:  # At least 2 headers match
+                    return sheet
+            
+            # Check sample values
+            sample_rows = meta.get('sample_rows', [])
+            if sample_rows and isinstance(sample_rows, list):
+                for row in sample_rows[:2]:
+                    if isinstance(row, dict):
+                        values = [str(v).lower() for v in row.values() if v]
+                        matches = sum(1 for v in values[:3] if v in chunk_lower)
+                        if matches >= 2:
+                            return sheet
+    
+    # Strategy 4: Default to first sheet
+    return list(metadata_dict.keys())[0] if metadata_dict else "Unknown"
 
 
 async def convert_xlsx_service(
