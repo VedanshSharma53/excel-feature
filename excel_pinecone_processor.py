@@ -14,6 +14,77 @@ import hashlib
 import os
 
 
+def _detect_header_row(df: pd.DataFrame) -> dict:
+    """
+    Intelligently detect if the first row is a header.
+    
+    Returns:
+        dict with keys:
+            - has_header: bool
+            - header_row_index: int or None
+            - detected_headers: list
+            - first_data_row: int
+            - confidence: float
+    """
+    if df.empty:
+        return {
+            "has_header": False,
+            "header_row_index": None,
+            "detected_headers": [],
+            "first_data_row": 0,
+            "confidence": 0.0
+        }
+    
+    confidence = 0.0
+    
+    # Check if pandas already detected meaningful headers
+    has_unnamed = any(str(col).startswith('Unnamed:') for col in df.columns)
+    meaningful_names = not all(isinstance(col, int) for col in df.columns)
+    generic_names = all(isinstance(col, int) for col in df.columns)
+    
+    if meaningful_names and not has_unnamed:
+        return {
+            "has_header": True,
+            "header_row_index": None,  # Already in columns
+            "detected_headers": [str(col) for col in df.columns],
+            "first_data_row": 0,
+            "confidence": 0.9
+        }
+    
+    # Check first row characteristics if headers are unnamed or generic
+    if has_unnamed or generic_names:
+        first_row = df.iloc[0]
+        
+        # Check 1: All strings in first row
+        if all(isinstance(val, str) for val in first_row):
+            confidence += 0.4
+        
+        # Check 2: Unique values in first row
+        if len(first_row.dropna().unique()) == len(first_row.dropna()):
+            confidence += 0.3
+        
+        # Check 3: No numbers in first row
+        if all(not isinstance(val, (int, float)) or pd.isna(val) for val in first_row):
+            confidence += 0.3
+    
+    if confidence >= 0.5:
+        return {
+            "has_header": True,
+            "header_row_index": 0,
+            "detected_headers": [str(val) for val in first_row.values],
+            "first_data_row": 1,
+            "confidence": confidence
+        }
+    else:
+        return {
+            "has_header": False,
+            "header_row_index": None,
+            "detected_headers": [f"Column_{i}" for i in range(len(df.columns))],
+            "first_data_row": 0,
+            "confidence": confidence
+        }
+
+
 class ExcelPineconeProcessor:
     """
     Process Excel files with multiple sheets and store in Pinecone with metadata.
@@ -144,8 +215,24 @@ class ExcelPineconeProcessor:
         # Drop completely empty rows
         df = df.dropna(how='all')
         
-        # Store column headers/titles
-        column_headers = list(df.columns)
+        # Intelligent header detection
+        header_info = _detect_header_row(df)
+        
+        # Adjust DataFrame based on header detection
+        if header_info["header_row_index"] == 0:
+            # First row is header, use it
+            column_headers = header_info["detected_headers"]
+            df = df.copy()
+            df.columns = column_headers
+            df = df.iloc[1:].reset_index(drop=True)  # Skip header row
+        elif header_info["has_header"]:
+            # Headers already in columns
+            column_headers = header_info["detected_headers"]
+        else:
+            # No headers, use generic names
+            column_headers = header_info["detected_headers"]
+            df = df.copy()
+            df.columns = column_headers
         
         # Process in chunks
         for i in range(0, len(df), chunk_size):
@@ -178,6 +265,11 @@ class ExcelPineconeProcessor:
                 # Sheet identification
                 "sheet_name": sheet_name,
                 "tab_name": sheet_name,  # Alias for clarity
+                
+                # Header detection info
+                "has_detected_header": header_info["has_header"],
+                "header_confidence": header_info["confidence"],
+                "header_source": "first_row" if header_info["header_row_index"] == 0 else "pandas" if header_info["has_header"] else "generated",
                 
                 # Row information
                 "start_row": i,
