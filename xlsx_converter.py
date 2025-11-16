@@ -149,95 +149,379 @@ def _analyze_sheet_structure(df: pd.DataFrame, sheet_name: str) -> dict:
         if not header_info["has_header"]:
             df_analyzed.columns = header_info["detected_headers"]
     
-    # Column analysis
+    # Enhanced column analysis with more details
     column_info = []
+    numeric_columns = []
+    text_columns = []
+    date_columns = []
+    boolean_columns = []
+    
     for col in df_analyzed.columns:
         col_data = df_analyzed[col].dropna()
         
         if len(col_data) == 0:
             col_type = "empty"
             sample_values = []
+            value_distribution = {}
+            stats = {}
         else:
-            # Detect column type
-            if col_data.apply(lambda x: isinstance(x, (int, float))).all():
-                col_type = "numeric"
-            elif col_data.apply(lambda x: isinstance(x, str)).all():
-                col_type = "text"
-            elif col_data.apply(lambda x: isinstance(x, (pd.Timestamp, pd.DatetimeTZDtype))).all():
-                col_type = "datetime"
-            else:
-                col_type = "mixed"
+            # Enhanced type detection with sub-types
+            col_type, stats = _detect_column_type_advanced(col_data, str(col))
             
-            # Get sample values (first 3 unique non-null values)
-            sample_values = col_data.unique()[:3].tolist()
+            # Track columns by type
+            if col_type in ["integer", "float", "numeric"]:
+                numeric_columns.append(str(col))
+            elif col_type in ["text", "string"]:
+                text_columns.append(str(col))
+            elif col_type in ["datetime", "date", "time"]:
+                date_columns.append(str(col))
+            elif col_type == "boolean":
+                boolean_columns.append(str(col))
+            
+            # Get sample values (more diverse samples)
+            if len(col_data) <= 5:
+                sample_values = col_data.tolist()
+            else:
+                # Get first, middle, and last values for better representation
+                sample_values = [
+                    col_data.iloc[0],
+                    col_data.iloc[len(col_data)//2],
+                    col_data.iloc[-1]
+                ]
+                # Add unique values if column is categorical-like
+                if col_data.nunique() <= 10:
+                    sample_values = col_data.unique()[:5].tolist()
+            
+            # Value distribution for categorical-like columns
+            value_distribution = {}
+            if col_data.nunique() <= 20:  # Categorical-like
+                value_counts = col_data.value_counts()
+                value_distribution = {
+                    str(k): int(v) for k, v in value_counts.head(10).items()
+                }
         
+        # Enhanced column metadata
         column_info.append({
             "name": str(col),
             "type": col_type,
             "null_count": int(df_analyzed[col].isna().sum()),
+            "null_percentage": round((df_analyzed[col].isna().sum() / len(df_analyzed)) * 100, 2),
             "unique_count": int(df_analyzed[col].nunique()),
-            "sample_values": [str(v)[:100] for v in sample_values]  # Limit string length
+            "uniqueness_ratio": round(df_analyzed[col].nunique() / len(col_data), 2) if len(col_data) > 0 else 0,
+            "sample_values": [str(v)[:100] for v in sample_values],
+            "value_distribution": value_distribution if value_distribution else None,
+            "statistics": stats
         })
     
-    # Pattern detection
+    # Enhanced pattern detection
     patterns = []
+    id_columns = []
+    title_columns = []
+    categorical_columns = []
+    key_value_pairs = {}
     
-    # Check for ID columns
-    id_columns = [col for col in df_analyzed.columns 
-                  if any(keyword in str(col).lower() for keyword in ['id', 'ref', 'number', '#', 'no'])]
+    # Check for ID columns (more comprehensive)
+    id_keywords = ['id', 'ref', 'number', '#', 'no', 'code', 'key', 'identifier']
+    for col in df_analyzed.columns:
+        col_lower = str(col).lower()
+        col_data = df_analyzed[col].dropna()
+        
+        # ID column detection
+        if any(keyword in col_lower for keyword in id_keywords):
+            id_columns.append(str(col))
+            # Check if it's sequential
+            if len(col_data) > 0 and col_data.dtype in ['int64', 'float64']:
+                try:
+                    is_sequential = (col_data.diff().dropna().abs() == 1).all()
+                    if is_sequential:
+                        patterns.append(f"Sequential ID column: {col}")
+                except:
+                    pass
+    
     if id_columns:
         patterns.append(f"ID columns detected: {', '.join(id_columns)}")
+        key_value_pairs['id_columns'] = id_columns
     
-    # Check for title/name columns
-    title_columns = [col for col in df_analyzed.columns 
-                     if any(keyword in str(col).lower() for keyword in ['title', 'name', 'description', 'requirement'])]
+    # Check for title/name/description columns
+    title_keywords = ['title', 'name', 'description', 'requirement', 'summary', 'subject', 'label']
+    for col in df_analyzed.columns:
+        if any(keyword in str(col).lower() for keyword in title_keywords):
+            title_columns.append(str(col))
+    
     if title_columns:
         patterns.append(f"Title/Name columns detected: {', '.join(title_columns)}")
+        key_value_pairs['title_columns'] = title_columns
     
-    # Check for date columns
-    date_columns = [col for col in df_analyzed.columns 
-                    if any(keyword in str(col).lower() for keyword in ['date', 'time', 'created', 'modified'])]
-    if date_columns:
-        patterns.append(f"Date columns detected: {', '.join(date_columns)}")
+    # Check for date/time columns
+    detected_date_columns = []
+    for col in df_analyzed.columns:
+        col_lower = str(col).lower()
+        if any(keyword in col_lower for keyword in ['date', 'time', 'created', 'modified', 'updated', 'timestamp']):
+            detected_date_columns.append(str(col))
     
-    # Check for categorical columns (low unique count relative to total)
-    categorical_columns = [col for col in df_analyzed.columns 
-                          if df_analyzed[col].nunique() < len(df_analyzed) * 0.1 and df_analyzed[col].nunique() > 1]
+    if detected_date_columns:
+        patterns.append(f"Date columns detected: {', '.join(detected_date_columns)}")
+        key_value_pairs['date_columns'] = detected_date_columns
+    
+    # Check for categorical columns (enhanced detection)
+    for col in df_analyzed.columns:
+        unique_ratio = df_analyzed[col].nunique() / len(df_analyzed)
+        if unique_ratio < 0.1 and df_analyzed[col].nunique() > 1:
+            categorical_columns.append(str(col))
+    
     if categorical_columns:
         patterns.append(f"Categorical columns detected: {', '.join(categorical_columns[:5])}")
+        key_value_pairs['categorical_columns'] = categorical_columns
+    
+    # Check for status/state columns
+    status_keywords = ['status', 'state', 'stage', 'phase', 'priority', 'severity', 'type']
+    status_columns = [col for col in df_analyzed.columns 
+                     if any(keyword in str(col).lower() for keyword in status_keywords)]
+    if status_columns:
+        patterns.append(f"Status/State columns detected: {', '.join(status_columns)}")
+        key_value_pairs['status_columns'] = status_columns
+    
+    # Detect potential relationships
+    relationships = _detect_relationships(df_analyzed, id_columns, title_columns)
+    if relationships:
+        patterns.extend(relationships)
     
     # Data quality metrics
     total_cells = len(df_analyzed) * len(df_analyzed.columns)
     null_cells = df_analyzed.isna().sum().sum()
     data_completeness = round((total_cells - null_cells) / total_cells * 100, 2) if total_cells > 0 else 0
     
+    # Calculate column-wise completeness
+    column_completeness = {}
+    for col in df_analyzed.columns:
+        completeness = round((1 - df_analyzed[col].isna().sum() / len(df_analyzed)) * 100, 2)
+        column_completeness[str(col)] = completeness
+    
+    # Detect data anomalies
+    anomalies = _detect_anomalies(df_analyzed, column_info)
+    
     return {
         "is_empty": False,
         "sheet_name": sheet_name,
         "total_rows": len(df_analyzed),
         "total_columns": len(df_analyzed.columns),
-        "total_data_rows": len(df_analyzed),  # Excluding header
+        "total_data_rows": len(df_analyzed),
         
         # Header information
         "header_detection": header_info,
-        "headers": header_info["detected_headers"][:20],  # First 20 headers
+        "headers": header_info["detected_headers"][:20],
         
-        # Column details
-        "columns": column_info[:20],  # First 20 columns detailed info
+        # Column details (enhanced)
+        "columns": column_info[:20],
+        "column_types_summary": {
+            "numeric": len(numeric_columns),
+            "text": len(text_columns),
+            "date": len(date_columns),
+            "boolean": len(boolean_columns)
+        },
         
-        # Patterns and insights
+        # Patterns and insights (enhanced)
         "patterns": patterns,
+        "key_columns": key_value_pairs,
         "has_id_column": len(id_columns) > 0,
         "has_title_column": len(title_columns) > 0,
-        "has_date_column": len(date_columns) > 0,
+        "has_date_column": len(detected_date_columns) > 0,
+        "has_status_column": len(status_columns) > 0 if 'status_columns' in key_value_pairs else False,
         
-        # Data quality
+        # Data quality (enhanced)
         "data_completeness_pct": data_completeness,
+        "column_completeness": column_completeness,
         "null_cells": int(null_cells),
         "total_cells": int(total_cells),
+        "data_quality_score": _calculate_quality_score(data_completeness, column_info),
+        "anomalies": anomalies,
         
-        # Sample data (first 2 rows for context)
-        "sample_rows": df_analyzed.head(2).to_dict('records') if len(df_analyzed) > 0 else []
+        # Sample data (enhanced with more context)
+        "sample_rows": df_analyzed.head(3).to_dict('records') if len(df_analyzed) > 0 else [],
+        "row_count_by_category": _get_category_counts(df_analyzed, categorical_columns),
+        
+        # Metadata summary for LLM
+        "llm_summary": _generate_llm_summary(
+            sheet_name, 
+            len(df_analyzed), 
+            header_info, 
+            key_value_pairs, 
+            patterns,
+            data_completeness
+        )
+    }
+
+
+def _detect_column_type_advanced(col_data: pd.Series, col_name: str) -> tuple:
+    """
+    Advanced column type detection with statistics.
+    
+    Returns:
+        (type_name, statistics_dict)
+    """
+    stats = {}
+    
+    # Check for boolean
+    unique_vals = col_data.unique()
+    if len(unique_vals) <= 2:
+        unique_lower = [str(v).lower() for v in unique_vals]
+        if all(v in ['true', 'false', '1', '0', 'yes', 'no', 'y', 'n'] for v in unique_lower):
+            stats['values'] = list(unique_vals)
+            return "boolean", stats
+    
+    # Check for numeric types
+    if pd.api.types.is_numeric_dtype(col_data):
+        if pd.api.types.is_integer_dtype(col_data):
+            stats['min'] = int(col_data.min())
+            stats['max'] = int(col_data.max())
+            stats['mean'] = round(float(col_data.mean()), 2)
+            stats['median'] = int(col_data.median())
+            return "integer", stats
+        else:
+            stats['min'] = round(float(col_data.min()), 2)
+            stats['max'] = round(float(col_data.max()), 2)
+            stats['mean'] = round(float(col_data.mean()), 2)
+            stats['median'] = round(float(col_data.median()), 2)
+            return "float", stats
+    
+    # Check for datetime
+    if pd.api.types.is_datetime64_any_dtype(col_data):
+        stats['earliest'] = str(col_data.min())
+        stats['latest'] = str(col_data.max())
+        stats['range_days'] = (col_data.max() - col_data.min()).days
+        return "datetime", stats
+    
+    # Check if string could be datetime
+    if col_data.dtype == 'object':
+        try:
+            parsed = pd.to_datetime(col_data, errors='coerce')
+            if parsed.notna().sum() / len(col_data) > 0.8:  # 80% parseable
+                stats['earliest'] = str(parsed.min())
+                stats['latest'] = str(parsed.max())
+                return "date", stats
+        except:
+            pass
+    
+    # Text/String type
+    if col_data.dtype == 'object':
+        # Calculate text statistics
+        lengths = col_data.astype(str).str.len()
+        stats['avg_length'] = round(float(lengths.mean()), 2)
+        stats['min_length'] = int(lengths.min())
+        stats['max_length'] = int(lengths.max())
+        
+        # Check if it's URL, email, etc.
+        sample = col_data.astype(str).str.lower()
+        if sample.str.contains('@').sum() / len(sample) > 0.8:
+            return "email", stats
+        if sample.str.contains('http').sum() / len(sample) > 0.8:
+            return "url", stats
+        
+        return "text", stats
+    
+    return "mixed", stats
+
+
+def _detect_relationships(df: pd.DataFrame, id_columns: list, title_columns: list) -> list:
+    """Detect potential relationships between columns."""
+    relationships = []
+    
+    # Check for foreign key patterns
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if '_id' in col_lower or col_lower.endswith('id'):
+            # Potential foreign key
+            relationships.append(f"Potential foreign key: {col}")
+    
+    # Check for hierarchical structures
+    if any('parent' in str(col).lower() for col in df.columns):
+        relationships.append("Hierarchical structure detected (parent-child relationship)")
+    
+    # Check for many-to-one relationships (duplicate IDs)
+    for id_col in id_columns:
+        if df[id_col].duplicated().any():
+            relationships.append(f"One-to-many relationship detected in: {id_col}")
+    
+    return relationships
+
+
+def _detect_anomalies(df: pd.DataFrame, column_info: list) -> list:
+    """Detect data anomalies and quality issues."""
+    anomalies = []
+    
+    for col_meta in column_info:
+        col_name = col_meta['name']
+        
+        # High null percentage
+        if col_meta['null_percentage'] > 50:
+            anomalies.append(f"High null rate in '{col_name}': {col_meta['null_percentage']}%")
+        
+        # All values are unique (might indicate no actual data or IDs)
+        if col_meta['uniqueness_ratio'] == 1.0 and len(df) > 10:
+            anomalies.append(f"All values unique in '{col_name}' - possibly ID or no duplicate check")
+        
+        # Very low uniqueness in supposedly unique column
+        if 'id' in col_name.lower() and col_meta['uniqueness_ratio'] < 0.5:
+            anomalies.append(f"Low uniqueness in ID column '{col_name}': {col_meta['uniqueness_ratio']}")
+    
+    return anomalies
+
+
+def _calculate_quality_score(completeness: float, column_info: list) -> float:
+    """Calculate overall data quality score (0-100)."""
+    score = completeness * 0.5  # 50% weight on completeness
+    
+    # Add points for column type consistency
+    type_consistency = sum(1 for col in column_info if col['type'] != 'mixed')
+    if len(column_info) > 0:
+        score += (type_consistency / len(column_info)) * 30  # 30% weight
+    
+    # Add points for low null rates
+    low_null_columns = sum(1 for col in column_info if col['null_percentage'] < 10)
+    if len(column_info) > 0:
+        score += (low_null_columns / len(column_info)) * 20  # 20% weight
+    
+    return round(score, 2)
+
+
+def _get_category_counts(df: pd.DataFrame, categorical_columns: list) -> dict:
+    """Get counts for categorical columns."""
+    counts = {}
+    for col in categorical_columns[:3]:  # First 3 categorical columns
+        if col in df.columns:
+            value_counts = df[col].value_counts().head(5).to_dict()
+            counts[col] = {str(k): int(v) for k, v in value_counts.items()}
+    return counts
+
+
+def _generate_llm_summary(sheet_name: str, row_count: int, header_info: dict, 
+                          key_columns: dict, patterns: list, completeness: float) -> str:
+    """Generate a human-readable summary for LLM context."""
+    summary_parts = [
+        f"Sheet '{sheet_name}' contains {row_count} rows of data."
+    ]
+    
+    # Header info
+    if header_info['has_header']:
+        summary_parts.append(f"Headers detected with {header_info['header_confidence']*100:.0f}% confidence.")
+    else:
+        summary_parts.append("No headers detected - data starts from first row.")
+    
+    # Key columns
+    if key_columns.get('id_columns'):
+        summary_parts.append(f"ID columns: {', '.join(key_columns['id_columns'])}.")
+    if key_columns.get('title_columns'):
+        summary_parts.append(f"Descriptive columns: {', '.join(key_columns['title_columns'])}.")
+    
+    # Data quality
+    if completeness >= 90:
+        summary_parts.append(f"Data quality is excellent ({completeness}% complete).")
+    elif completeness >= 70:
+        summary_parts.append(f"Data quality is good ({completeness}% complete).")
+    else:
+        summary_parts.append(f"Data quality needs attention ({completeness}% complete with missing values).")
+    
+    return " ".join(summary_parts)
     }
 
 
