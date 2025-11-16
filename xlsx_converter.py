@@ -522,7 +522,6 @@ def _generate_llm_summary(sheet_name: str, row_count: int, header_info: dict,
         summary_parts.append(f"Data quality needs attention ({completeness}% complete with missing values).")
     
     return " ".join(summary_parts)
-    }
 
 
 def _create_chunks_with_metadata(text: str, excel_path: str, chunk_size: int = 1000, overlap: int = 200) -> list:
